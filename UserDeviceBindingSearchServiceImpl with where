@@ -1,0 +1,192 @@
+package com.mosambee.report.cpoc.service.impl;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.stereotype.Service;
+
+import com.mosambee.configuration.constant.ApiResponseCode;
+import com.mosambee.configuration.constant.ApiResponseMessage;
+import com.mosambee.configuration.constant.Result;
+import com.mosambee.exception.HibernateDbException;
+import com.mosambee.report.cpoc.payload.request.DeviceBindingRequest;
+import com.mosambee.report.cpoc.payload.response.UserDeviceBindingSearchDbResponse;
+import com.mosambee.report.cpoc.payload.response.UserDeviceBindingSearchResponse;
+import com.mosambee.report.cpoc.service.UserDeviceBindingSearchService;
+
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityManagerFactory;
+import jakarta.persistence.TypedQuery;
+import lombok.extern.log4j.Log4j2;
+
+/**
+ * 
+ * Using this class we can search binding device users, here empty
+ * bindingType for all device users bindingType 0 for untie device users and
+ * bindingType 1 for binding device users. here has various search option if
+ * user has deviceId or userName or bindingType and also search combined of all
+ * fields.
+ * 
+ * @author sazzad.alom
+ * @version 1.0.0
+ * @since 18-FEB-2023
+ */
+@Log4j2
+@Service
+public class UserDeviceBindingSearchServiceImpl implements UserDeviceBindingSearchService {
+	private final EntityManagerFactory entityManagerFactory;
+
+	public UserDeviceBindingSearchServiceImpl(
+			@Qualifier("sfnTransactionEntityManagerFactory") EntityManagerFactory entityManagerFactory) {
+		this.entityManagerFactory = entityManagerFactory;
+	}
+
+	@Override
+	public UserDeviceBindingSearchResponse findAllDevice(DeviceBindingRequest deviceBindingRequest) {
+		List<UserDeviceBindingSearchDbResponse> userDeviceBindingList = this.getDeviceBindingList(deviceBindingRequest);
+
+		if (userDeviceBindingList.isEmpty()) {
+
+			return UserDeviceBindingSearchResponse.builder().result(Result.FAILED)
+					.message(ApiResponseMessage.DETAILS_NOT_FOUND).responseCode(ApiResponseCode.FAILED).build();
+
+		}
+
+		long totalRecords = this.getTotalDeviceBindingCount(deviceBindingRequest);
+		log.debug("total records obtained: {}", totalRecords);
+
+		return UserDeviceBindingSearchResponse.builder().result(Result.SUCCESS)
+				.message(ApiResponseMessage.USER_DEVICE_BINDING_LIST_FOUND).responseCode(ApiResponseCode.SUCCESS)
+				.userDeviceBindingDetails(userDeviceBindingList).totalRecords(totalRecords)
+				.filteredRecords(userDeviceBindingList.size()).build();
+
+	}
+
+	private List<UserDeviceBindingSearchDbResponse> getDeviceBindingList(DeviceBindingRequest deviceBindingRequest) {
+
+		try (EntityManager resultSetEntityManager = entityManagerFactory.createEntityManager()) {
+			Map<String, Object> resultSetQueryParamMap = new HashMap<>();
+
+			TypedQuery<UserDeviceBindingSearchDbResponse> resultSetQuery = resultSetEntityManager.createQuery(
+							this.buildDeviceBindingSearchJpqlQuery(deviceBindingRequest, resultSetQueryParamMap, false),
+							UserDeviceBindingSearchDbResponse.class)
+					.setMaxResults(deviceBindingRequest.getNoOfRecords())
+					.setFirstResult((deviceBindingRequest.getPageNo() - 1) * deviceBindingRequest.getNoOfRecords());
+
+			for (Map.Entry<String, Object> entry : resultSetQueryParamMap.entrySet()) {
+				resultSetQuery.setParameter(entry.getKey(), entry.getValue());
+			}
+
+			return resultSetQuery.getResultList();
+		}
+		catch(Exception exception) {
+			log.error("exception occured :{}", exception.getMessage());
+			throw new HibernateDbException(ApiResponseMessage.EXCEPTION_OCCURED_IN_DEVICE_BINDING_LIST , ApiResponseCode.ERROR_OCCURED_IN_DEVICE_BINDING_LIST);
+		}
+	}
+
+	private long getTotalDeviceBindingCount(DeviceBindingRequest deviceBindingRequest) {
+
+		try (EntityManager resultSetEntityManager = entityManagerFactory.createEntityManager()) {
+			Map<String, Object> resultSetQueryParamMap = new HashMap<>();
+
+			TypedQuery<Long> resultSetQuery = resultSetEntityManager.createQuery(
+					this.buildDeviceBindingSearchJpqlQuery(deviceBindingRequest, resultSetQueryParamMap, true),
+					Long.class);
+
+			for (Map.Entry<String, Object> entry : resultSetQueryParamMap.entrySet()) {
+				resultSetQuery.setParameter(entry.getKey(), entry.getValue());
+			}
+
+			return resultSetQuery.getSingleResult();
+		}
+		catch(Exception exception) {
+			log.error("exception occured :{}", exception.getMessage());
+			throw new HibernateDbException(ApiResponseMessage.EXCEPTION_OCCURED_IN_DEVICE_BINDING_COUNT , ApiResponseCode.ERROR_OCCURED_IN_DEVICE_BINDING_COUNT);
+		}
+	}
+
+	/**
+	 * <p>
+	 * for record
+	 * </p>
+	 * 
+	 * <p>
+	 * select m1_0.id,m1_0.deviceId,m1_0.userName,m1_0.status
+	 * </p>
+	 * <p>
+	 * from mapping_user_device_binding m1_0 where m1_0.id is not null
+	 * </p>
+	 * <p>
+	 * group by m1_0.id
+	 * </p>
+	 * 
+	 * <p>
+	 * for count
+	 * </p>
+	 * 
+	 * <P>
+	 * select count(m1_0.id) from mapping_user_device_binding m1_0
+	 * <p>
+	 * where m1_0.id is not null
+	 * </p>
+	 * 
+	 * @param deviceBindingRequest
+	 * @param paramaterMap
+	 * @param count
+	 * @return
+	 */
+
+	private String buildDeviceBindingSearchJpqlQuery(DeviceBindingRequest deviceBindingRequest,
+			Map<String, Object> paramaterMap, boolean count) {
+		
+		StringBuilder queryBuilder = new StringBuilder();
+
+		queryBuilder.append(" select ");
+		if (count) {
+			queryBuilder.append("  count(d.id) ");
+		} else {
+
+			queryBuilder.append(
+					" new com.mosambee.report.cpoc.payload.response.UserDeviceBindingSearchDbResponse( d.id, d.deviceId, d.userName, d.status, d.createdTime )");
+		}
+
+		queryBuilder.append(" from MappingUserDeviceBinding d");
+
+		List<String> whereClause = new ArrayList<>();
+
+		if (StringUtils.isNotBlank(deviceBindingRequest.getDeviceId())) {
+			whereClause.add(" d.`deviceId` = :deviceId ");
+			paramaterMap.put("deviceId", deviceBindingRequest.getDeviceId());
+		}
+
+		if (StringUtils.isNoneBlank(deviceBindingRequest.getUserName())) {
+			whereClause.add(" d.userName = :userName ");
+			paramaterMap.put("userName", deviceBindingRequest.getUserName());
+		}
+		
+		if (StringUtils.isNotBlank(deviceBindingRequest.getBindingType())) {
+			if (deviceBindingRequest.getBindingType().equals("0")) {
+				whereClause.add("d.status =:status");
+				paramaterMap.put("status", deviceBindingRequest.getBindingType());
+			}
+			if (deviceBindingRequest.getBindingType().equals("1")) {
+				whereClause.add("d.status =:status");
+				paramaterMap.put("status", deviceBindingRequest.getBindingType());
+			}
+		}
+		
+		whereClause.add("d.id is not null");
+
+		queryBuilder.append(" where " + StringUtils.join(whereClause, " and "));
+		if (!count) {
+			queryBuilder.append(" group by d.id  ");
+		}
+
+		return queryBuilder.toString();
+	}
+}
