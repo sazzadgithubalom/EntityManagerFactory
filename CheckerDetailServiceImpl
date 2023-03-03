@@ -1,0 +1,130 @@
+package com.mosambee.report.checker.service.impl;
+
+import java.util.List;
+
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.stereotype.Service;
+
+import com.mosambee.configuration.constant.ApiResponseCode;
+import com.mosambee.configuration.constant.ApiResponseMessage;
+import com.mosambee.configuration.constant.Result;
+import com.mosambee.database.sfntransaction.entities.master.CheckLogs;
+import com.mosambee.exception.InternalServerError;
+import com.mosambee.report.checker.payload.CheckerDetailRequest;
+import com.mosambee.report.checker.payload.CheckerDetailResponse;
+import com.mosambee.report.checker.service.CheckerDetailService;
+
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityManagerFactory;
+import jakarta.persistence.TypedQuery;
+import lombok.extern.log4j.Log4j2;
+/**
+ * 
+ * Using this class we can search all checker logs details excluded logged in user page wise and count wise.
+ * 
+ * @author sazzad.alom
+ * @version 1.0.0
+ * @since 03-MAR-2023
+ */
+@Log4j2
+@Service
+public class CheckerDetailServiceImpl implements CheckerDetailService{
+	private final EntityManagerFactory entityManagerFactory;
+
+	public CheckerDetailServiceImpl(@Qualifier("sfnTransactionEntityManagerFactory") EntityManagerFactory entityManagerFactory) {
+		this.entityManagerFactory = entityManagerFactory;
+	}
+
+	@Override
+	public CheckerDetailResponse findAllCheckerLogs(CheckerDetailRequest checkerDetailRequest, long userId) {
+		List<CheckLogs> ckeckLogsDetail = this.fetchCheckerDetail(checkerDetailRequest, userId);
+		log.debug("fetched ckecker logs detail: {}", ckeckLogsDetail);
+
+		if (ckeckLogsDetail.isEmpty()) {
+			return CheckerDetailResponse.builder().result(Result.FAILED)
+					.message(ApiResponseMessage.DETAILS_NOT_FOUND).responseCode(ApiResponseCode.FAILED).build();
+		}
+		
+		long totalCheckLogs = this.getTotalCheckLogsCount(userId);
+		log.debug("total check logs count: {}", totalCheckLogs);
+
+		return CheckerDetailResponse.builder()
+				.result(Result.SUCCESS)
+				.message(ApiResponseMessage.CHECK_LOG_FOUNDED)
+				.ckeckLogsDetail(ckeckLogsDetail)
+				.totalRecords(totalCheckLogs)
+				.filteredRecords(totalCheckLogs)
+				.responseCode(ApiResponseCode.SUCCESS)
+				.build();
+	}
+
+	private long getTotalCheckLogsCount(long userId) {
+		
+		try(EntityManager resultSetEntityManager = entityManagerFactory.createEntityManager()) {
+			TypedQuery<Long> resultSetQuery = resultSetEntityManager.createQuery(this.buildCheckLogsDetailJPQLQuery(true, userId),Long.class);
+			return resultSetQuery.getSingleResult();
+			
+		}catch (Exception exception) {
+			log.debug("sql exception occuered: {}", exception.getMessage());
+			throw new InternalServerError(ApiResponseMessage.INTERNAL_SERVER_ERROR);
+		}
+	}
+
+	private List<CheckLogs> fetchCheckerDetail(CheckerDetailRequest checkerDetailRequest, long userId) {
+		try(EntityManager resultSetEntityManager = entityManagerFactory.createEntityManager()) {
+		
+			TypedQuery<CheckLogs> resultSetQuery = resultSetEntityManager.createQuery(this.buildCheckLogsDetailJPQLQuery(false, userId)
+					,CheckLogs.class)
+					.setMaxResults(checkerDetailRequest.getNoOfRecords())
+					.setFirstResult((checkerDetailRequest.getPageNo() - 1) * checkerDetailRequest.getNoOfRecords());
+			
+			return resultSetQuery.getResultList();
+		} catch (Exception exception) {
+			log.debug("sql exception occuered: {}", exception.getMessage());
+			throw new InternalServerError(ApiResponseMessage.INTERNAL_SERVER_ERROR);
+		}
+	}
+	
+	/**
+	 * 
+	 * <p>for record</p>
+	 * <p>
+	 * select c1_0.id,c1_0.created_by,c1_0.created_time,c1_0.event,
+	 * 
+	 * c1_0.modified_data,c1_0.module_name,c1_0.status,c1_0.verified_by,
+	 * 
+	 * c1_0.verified_time,c1_0.version from check_logs c1_0
+	 * 
+	 * where c1_0.status='P' and c1_0.created_by != c1_0.created_by
+	 * 
+	 * </p>
+	 * 
+	 * <p>for count</p>
+	 * 
+	 * <p>
+	 * select count(c1_0.id) from check_logs c1_0 where c1_0.status = 'P' and c1_0.created_by! = c1_0.created_by
+	 * </p>
+	 * 
+	 * @param userId
+	 * @param CheckerDetailRequest
+	 * @param count
+	 * @return
+	 * 
+	 * */
+
+	private String buildCheckLogsDetailJPQLQuery(boolean count, long userId) {
+			StringBuilder queryBuilder = new StringBuilder();
+			queryBuilder.append("select ");
+			if (count) {
+				queryBuilder.append("count(c.id) ");
+			}
+			else {
+				queryBuilder.append("c ");
+			}
+			queryBuilder.append("from CheckLogs c where status = 'P' and ");
+			queryBuilder.append("createdBy != ");
+			queryBuilder.append(userId);
+		return queryBuilder.toString();
+	}
+
+}
